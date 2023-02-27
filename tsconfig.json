@@ -3,9 +3,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "target": "es2020",
-    "lib": [
-      "es2020", "DOM"
-    ],
+    "lib": ["es2020", "DOM"],
     "module": "ES2020",
     "moduleResolution": "Node",
     "strict": true,
@@ -13,6 +11,10 @@
     "allowSyntheticDefaultImports": true,
     "declaration": true,
     "noImplicitAny": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "esModuleInterop": true
+  },
+  "ts-node": {
+    "esm": true
   }
 }
