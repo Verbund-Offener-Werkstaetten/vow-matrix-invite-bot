@@ -10,6 +10,7 @@ import {
   SynapseUser,
 } from "matrix-bot-sdk";
 import { format } from "node:util";
+import KcAdminClient from "@keycloak/keycloak-admin-client";
 
 interface ExtendedSynapseUser extends SynapseUser {
   external_ids: Array<{ auth_provider: string; external_id: string }>;
@@ -31,8 +32,23 @@ const crypto = new RustSdkCryptoStorageProvider("./storage/bot_sled");
 const client = new MatrixClient(MX_HS_URL, MX_ACCESS_TOKEN, storage, crypto);
 const synapseClient = new SynapseAdminApis(client);
 
+const kcAdminClient = new KcAdminClient({
+  baseUrl: "https://willkommen.offene-werkstaetten.org",
+  realmName: "master",
+});
+
 (async function () {
+  await kcAdminClient.auth({
+    username: "abc123",
+    password: "abc123",
+    grantType: "password",
+    clientId: "admin-cli",
+  });
+
   await client.dms.update();
+  kcAdminClient.setConfig({
+    realmName: "verbund-offener-werkstaetten",
+  });
 
   client.on("room.event", async (roomId, event) => {
     LogService.info("index", "Got room event");
@@ -47,32 +63,49 @@ const synapseClient = new SynapseAdminApis(client);
     LogService.info("index", "User joined monitored room", event);
 
     const dmTarget = event.sender;
-    let isKeycloakUser = false;
+    let keycloakId = null;
     if (dmTarget) {
       try {
         const userInfo = (await synapseClient.getUser(
           dmTarget
         )) as ExtendedSynapseUser;
 
-        isKeycloakUser = userInfo["external_ids"].some(
-          (entry) => entry["auth_provider"] === "oidc-keycloak"
-        );
+        keycloakId = userInfo.external_ids.find(
+          (entry) => entry.auth_provider === "oidc-keycloak"
+        )?.external_id;
       } catch (e) {
         LogService.info("index", "User is not known in Keycloak.");
       }
-      if (isKeycloakUser) {
+      if (keycloakId) {
         LogService.info(
           "index",
-          "User is known in Keycloak. Sending message...",
-          dmTarget
+          "User is known in Keycloak under ID ",
+          keycloakId
         );
-        const dmRoomId = await client.dms.getOrCreateDm(dmTarget);
+        try {
+          const kcUserGroups = (
+            await kcAdminClient.users.listGroups({
+              id: keycloakId,
+              briefRepresentation: false,
+            })
+          ).map((groupObject) => ({
+            slug: groupObject?.attributes?.workshopSlug[0],
+            name: groupObject?.attributes?.workshopName[0],
+          }));
 
-        const content = {
-          body: format(MSG_WELCOME, event.sender),
-          msgtype: "m.text",
-        };
-        client.sendMessage(dmRoomId, content);
+          LogService.info("index", "Groups", kcUserGroups);
+
+          const content = {
+            body: format(MSG_WELCOME, event.sender, kcUserGroups[0].name),
+            msgtype: "m.text",
+          };
+
+          const dmRoomId = await client.dms.getOrCreateDm(dmTarget);
+
+          client.sendMessage(dmRoomId, content);
+        } catch (e) {
+          LogService.error("index", e);
+        }
       } else {
         LogService.info("index", "Not sending message to", dmTarget);
       }
@@ -80,6 +113,7 @@ const synapseClient = new SynapseAdminApis(client);
   });
 
   client.on("room.message", async (roomId: string, event: any) => {
+    LogService.info("index", "Got room message event");
     // Not interested in non-DMs
     if (roomId === MONITORED_ROOM_ID) return;
 
@@ -87,7 +121,34 @@ const synapseClient = new SynapseAdminApis(client);
 
     if (message.messageType !== "m.text") return;
     if (message.textBody.startsWith("!space")) {
-      await client.replyNotice(roomId, event, "Space wird erstellt.");
+      await client.replyText(roomId, event, "Space wird erstellt.");
+
+      const userInfo = (await synapseClient.getUser(
+        event.sender
+      )) as ExtendedSynapseUser;
+
+      const keycloakId = userInfo.external_ids.find(
+        (entry) => entry.auth_provider === "oidc-keycloak"
+      )?.external_id;
+
+      if (keycloakId) {
+        const kcUserGroups = (
+          await kcAdminClient.users.listGroups({
+            id: keycloakId,
+            briefRepresentation: false,
+          })
+        ).map((groupObject) => ({
+          slug: groupObject?.attributes?.workshopSlug[0],
+          name: groupObject?.attributes?.workshopName[0],
+        }));
+
+        client.createSpace({
+          name: kcUserGroups[0].name,
+          isPublic: false,
+          localpart: kcUserGroups[0].slug,
+          invites: [event.sender],
+        });
+      }
     }
   });
 
@@ -100,3 +161,28 @@ const synapseClient = new SynapseAdminApis(client);
   LogService.info("index", `Bot Account:`, (await client.getWhoAmI()).user_id);
   await client.start();
 })();
+
+const getKcGroupsForMxId = async (mxId: string) => {
+  const synapseUser = (await synapseClient.getUser(
+    mxId
+  )) as ExtendedSynapseUser;
+
+  const kcId = synapseUser.external_ids.find(
+    (entry) => entry.auth_provider === "oidc-keycloak"
+  )?.external_id;
+
+  if (kcId) {
+    const kcUserGroups = (
+      await kcAdminClient.users.listGroups({
+        id: kcId,
+        briefRepresentation: false,
+      })
+    ).map((groupObject) => ({
+      slug: groupObject?.attributes?.workshopSlug[0],
+      name: groupObject?.attributes?.workshopName[0],
+    }));
+
+    return kcUserGroups;
+  }
+  return null;
+};
