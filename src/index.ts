@@ -1,88 +1,96 @@
-import {
-  LogLevel,
-  LogService,
-  MatrixClient,
-  MessageEvent,
-  RichConsoleLogger,
-  RustSdkCryptoStorageProvider,
-  SimpleFsStorageProvider,
-  SynapseAdminApis,
-  SynapseUser,
-} from "matrix-bot-sdk";
 import { format } from "node:util";
 import KcAdminClient from "@keycloak/keycloak-admin-client";
+import * as sdk from "matrix-js-sdk";
+import {
+  MatrixEvent,
+  Preset,
+  Room,
+  RoomEvent,
+  RoomMemberEvent,
+} from "matrix-js-sdk";
+import { SynapseAdminClient } from "./SynapseAdminClient.js";
 
-interface ExtendedSynapseUser extends SynapseUser {
-  external_ids: Array<{ auth_provider: string; external_id: string }>;
-}
+const {
+  MX_MONITORED_ROOM_ID,
+  MX_HS_URL,
+  APP_NAME,
+  MX_ACCESS_TOKEN,
+  MX_MSG_WELCOME_HTML,
+  MX_MSG_WELCOME_TXT,
+  MX_MSG_COMMAND,
+  KC_URL,
+  KC_REALM,
+  KC_ADMIN_USERNAME,
+  KC_ADMIN_PASSWORD,
+} = process.env;
 
-LogService.setLogger(new RichConsoleLogger());
-LogService.setLevel(LogLevel.DEBUG);
-LogService.muteModule("Metrics");
-
-const { MONITORED_ROOM_ID, MX_HS_URL, APP_NAME, MX_ACCESS_TOKEN, MSG_WELCOME } =
-  process.env;
-if (!MONITORED_ROOM_ID || !MX_HS_URL || !MX_ACCESS_TOKEN) {
+if (
+  !MX_MONITORED_ROOM_ID ||
+  !MX_HS_URL ||
+  !MX_ACCESS_TOKEN ||
+  !KC_URL ||
+  !KC_ADMIN_USERNAME ||
+  !KC_ADMIN_PASSWORD ||
+  !KC_REALM ||
+  !MX_MSG_WELCOME_HTML ||
+  !MX_MSG_WELCOME_TXT ||
+  !MX_MSG_COMMAND
+) {
   throw new Error("Missing required configuration variables");
 }
 
-const storage = new SimpleFsStorageProvider("./storage/bot.json");
-const crypto = new RustSdkCryptoStorageProvider("./storage/bot_sled");
+const mxClient = sdk.createClient({
+  baseUrl: "https://" + MX_HS_URL,
+  accessToken: MX_ACCESS_TOKEN,
+  deviceId: "VOW Bot",
+  userId: "@vow.bot:vow.chat",
+});
 
-const client = new MatrixClient(MX_HS_URL, MX_ACCESS_TOKEN, storage, crypto);
-const synapseClient = new SynapseAdminApis(client);
+const synapseAdminClient = new SynapseAdminClient(MX_HS_URL, MX_ACCESS_TOKEN);
 
 const kcAdminClient = new KcAdminClient({
-  baseUrl: "https://willkommen.offene-werkstaetten.org",
+  baseUrl: KC_URL,
   realmName: "master",
 });
 
-(async function () {
+(async () => {
   await kcAdminClient.auth({
-    username: "abc123",
-    password: "abc123",
+    username: KC_ADMIN_USERNAME,
+    password: KC_ADMIN_PASSWORD,
     grantType: "password",
     clientId: "admin-cli",
   });
 
-  await client.dms.update();
   kcAdminClient.setConfig({
-    realmName: "verbund-offener-werkstaetten",
+    realmName: KC_REALM,
   });
 
-  client.on("room.event", async (roomId, event) => {
-    LogService.info("index", "Got room event");
+  await mxClient.startClient();
+
+  mxClient.on(RoomMemberEvent.Membership, async (event, member) => {
     if (
-      !event["state_key"] ||
-      event["content"]["membership"] !== "join" ||
-      event["type"] !== "m.room.member" ||
-      roomId !== MONITORED_ROOM_ID
-    )
+      member.membership === "join" &&
+      event.getRoomId() === MX_MONITORED_ROOM_ID
+    ) {
+      console.log("User joined monitored room", event);
+    } else {
       return;
+    }
 
-    LogService.info("index", "User joined monitored room", event);
+    const dmTarget = event.getSender();
+    console.log("DM TARGET", dmTarget);
 
-    const dmTarget = event.sender;
-    let keycloakId = null;
     if (dmTarget) {
       try {
-        const userInfo = (await synapseClient.getUser(
-          dmTarget
-        )) as ExtendedSynapseUser;
+        const userInfo = await synapseAdminClient.getUser(dmTarget);
 
-        keycloakId = userInfo.external_ids.find(
+        const keycloakId = userInfo?.external_ids?.find(
           (entry) => entry.auth_provider === "oidc-keycloak"
         )?.external_id;
-      } catch (e) {
-        LogService.info("index", "User is not known in Keycloak.");
-      }
-      if (keycloakId) {
-        LogService.info(
-          "index",
-          "User is known in Keycloak under ID ",
-          keycloakId
-        );
-        try {
+
+        console.log("User is known in Keycloak", keycloakId);
+
+        if (keycloakId) {
           const kcUserGroups = (
             await kcAdminClient.users.listGroups({
               id: keycloakId,
@@ -93,96 +101,173 @@ const kcAdminClient = new KcAdminClient({
             name: groupObject?.attributes?.workshopName[0],
           }));
 
-          LogService.info("index", "Groups", kcUserGroups);
+          if (kcUserGroups.length) {
+            console.log("User has Keycloak Groups", kcUserGroups);
+            console.log("Sending DM...");
+            const { room_id } = await mxClient.createRoom({
+              invite: [dmTarget],
+              is_direct: true,
+              preset: Preset.TrustedPrivateChat,
+              initial_state: [],
+            });
 
-          const content = {
-            body: format(MSG_WELCOME, event.sender, kcUserGroups[0].name),
-            msgtype: "m.text",
-          };
+            console.log("Created Room", room_id);
 
-          const dmRoomId = await client.dms.getOrCreateDm(dmTarget);
-
-          client.sendMessage(dmRoomId, content);
-        } catch (e) {
-          LogService.error("index", e);
+            const bodyHtml = format(
+              MX_MSG_WELCOME_HTML,
+              dmTarget,
+              kcUserGroups[0].name
+            );
+            const bodyTxt = format(
+              MX_MSG_WELCOME_TXT,
+              dmTarget,
+              kcUserGroups[0].name
+            );
+            mxClient.sendHtmlMessage(room_id, bodyTxt, bodyHtml);
+          }
         }
-      } else {
-        LogService.info("index", "Not sending message to", dmTarget);
+      } catch (e) {
+        console.log("User is not known in Keycloak.", e);
       }
     }
   });
 
-  client.on("room.message", async (roomId: string, event: any) => {
-    LogService.info("index", "Got room message event");
-    // Not interested in non-DMs
-    if (roomId === MONITORED_ROOM_ID) return;
+  mxClient.on(
+    RoomEvent.Timeline,
+    async (
+      event: MatrixEvent,
+      room: Room | undefined,
+      toStartOfTimeline: boolean | undefined
+    ) => {
+      if (toStartOfTimeline) {
+        return; // don't print paginated results
+      }
 
-    const message = new MessageEvent(event);
+      const senderId = event.getSender();
 
-    if (message.messageType !== "m.text") return;
-    if (message.textBody.startsWith("!space")) {
-      await client.replyText(roomId, event, "Space wird erstellt.");
+      // Ignore own messages
+      if (senderId === mxClient.getUserId()) return;
 
-      const userInfo = (await synapseClient.getUser(
-        event.sender
-      )) as ExtendedSynapseUser;
+      // Only chat messages
+      if (event.getType() !== "m.room.message") return;
 
-      const keycloakId = userInfo.external_ids.find(
-        (entry) => entry.auth_provider === "oidc-keycloak"
-      )?.external_id;
+      const c: any = event.getContent();
 
-      if (keycloakId) {
-        const kcUserGroups = (
-          await kcAdminClient.users.listGroups({
-            id: keycloakId,
-            briefRepresentation: false,
-          })
-        ).map((groupObject) => ({
-          slug: groupObject?.attributes?.workshopSlug[0],
-          name: groupObject?.attributes?.workshopName[0],
-        }));
+      if (c.body?.startsWith(MX_MSG_COMMAND) && senderId) {
+        const userInfo = await synapseAdminClient.getUser(senderId);
 
-        client.createSpace({
-          name: kcUserGroups[0].name,
-          isPublic: false,
-          localpart: kcUserGroups[0].slug,
-          invites: [event.sender],
-        });
+        const keycloakId = userInfo?.external_ids?.find(
+          (entry) => entry.auth_provider === "oidc-keycloak"
+        )?.external_id;
+
+        if (keycloakId) {
+          const kcUserGroups = (
+            await kcAdminClient.users.listGroups({
+              id: keycloakId,
+              briefRepresentation: false,
+            })
+          ).map((groupObject) => ({
+            slug: groupObject?.attributes?.workshopSlug[0],
+            name: groupObject?.attributes?.workshopName[0],
+          }));
+
+          const spaceNameLocalPart = kcUserGroups[0].slug + "11";
+          const spaceName = "#" + spaceNameLocalPart + ":" + MX_HS_URL;
+          console.log("GOT CREATE COMMAND. CREATING SPACE NAMED ", spaceName);
+          const roomNameLocalPart = kcUserGroups[0].slug + "-allgemein11";
+          const roomName = "#" + roomNameLocalPart + ":" + MX_HS_URL;
+          let roomExists;
+          let spaceExists;
+          // Check if Space exists
+
+          try {
+            const existingSpace = await mxClient.getRoomIdForAlias(spaceName);
+            console.log("Space exists", existingSpace);
+          } catch (e) {
+            // Create space
+            const spaceResponse = await mxClient.createRoom({
+              name: kcUserGroups[0].name,
+              room_alias_name: spaceNameLocalPart,
+              topic: "Space für " + kcUserGroups[0].name,
+              creation_content: { type: "m.space" },
+            });
+            console.log("Created space", spaceResponse);
+            spaceExists = spaceResponse.room_id;
+          }
+
+          try {
+            const existingRoom = await mxClient.getRoomIdForAlias(roomName);
+            console.log("Room exists", existingRoom);
+          } catch (e) {
+            // Create room
+            const roomResponse = await mxClient.createRoom({
+              name: kcUserGroups[0].name + " Allgemein",
+              room_alias_name: roomNameLocalPart,
+              topic: "Allgemeiner Raum für " + kcUserGroups[0].name,
+            });
+            console.log("Created room", roomResponse);
+            roomExists = roomResponse.room_id;
+          }
+
+          if (roomExists && spaceExists) {
+            const rel1 = await mxClient.sendStateEvent(
+              spaceExists,
+              "m.space.child",
+              {
+                via: MX_HS_URL,
+                suggested: true
+              },
+              roomExists
+            );
+            const rel2 = await mxClient.sendStateEvent(
+              roomExists,
+              "m.space.parent",
+              {
+                via: MX_HS_URL,
+              },
+              spaceExists
+            );
+            console.log("rel1", rel1);
+            console.log("rel2", rel2);
+          }
+
+          // Invite to Room
+          spaceExists && mxClient.invite(spaceExists, senderId);
+          roomExists && mxClient.invite(roomExists, senderId);
+
+          // try {
+          //     inviteToMatrixRoom(userMxId, spaceId);
+          //     inviteToMatrixRoom(userMxId, roomId);
+          // } catch (Exception e) {
+          //     log.info(e);
+          // }
+        }
       }
     }
-  });
-
-  // TODO: Handle bot already being in the room
-  client.on("room.invite", (roomId: string, inviteEvent: any) => {
-    if (roomId === MONITORED_ROOM_ID) return client.joinRoom(roomId);
-  });
-
-  LogService.info("index", `Starting ${APP_NAME}...`);
-  LogService.info("index", `Bot Account:`, (await client.getWhoAmI()).user_id);
-  await client.start();
+  );
 })();
 
-const getKcGroupsForMxId = async (mxId: string) => {
-  const synapseUser = (await synapseClient.getUser(
-    mxId
-  )) as ExtendedSynapseUser;
+// const getKcGroupsForMxId = async (mxId: string) => {
+//   const synapseUser = (await synapseClient.getUser(
+//     mxId
+//   )) as ExtendedSynapseUser;
 
-  const kcId = synapseUser.external_ids.find(
-    (entry) => entry.auth_provider === "oidc-keycloak"
-  )?.external_id;
+//   const kcId = synapseUser.external_ids.find(
+//     (entry) => entry.auth_provider === "oidc-keycloak"
+//   )?.external_id;
 
-  if (kcId) {
-    const kcUserGroups = (
-      await kcAdminClient.users.listGroups({
-        id: kcId,
-        briefRepresentation: false,
-      })
-    ).map((groupObject) => ({
-      slug: groupObject?.attributes?.workshopSlug[0],
-      name: groupObject?.attributes?.workshopName[0],
-    }));
+//   if (kcId) {
+//     const kcUserGroups = (
+//       await kcAdminClient.users.listGroups({
+//         id: kcId,
+//         briefRepresentation: false,
+//       })
+//     ).map((groupObject) => ({
+//       slug: groupObject?.attributes?.workshopSlug[0],
+//       name: groupObject?.attributes?.workshopName[0],
+//     }));
 
-    return kcUserGroups;
-  }
-  return null;
-};
+//     return kcUserGroups;
+//   }
+//   return null;
+// };
