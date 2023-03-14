@@ -34,4 +34,4 @@ class SynapseAdminClient {
   }
 }
 
-export {SynapseAdminClient};
+export { SynapseAdminClient };
