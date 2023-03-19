@@ -11,10 +11,15 @@ import {
 } from "matrix-js-sdk";
 import { SynapseAdminClient } from "./SynapseAdminClient.js";
 import { Logger, LogLevel } from "./Logger.js";
+import * as dotenv from "dotenv";
+
+dotenv.config();
 
 const {
   MX_MONITORED_ROOM_ID,
   MX_HS_URL,
+  MX_DEVICE_ID,
+  MX_USER_ID,
   MX_ACCESS_TOKEN,
   MX_MSG_WELCOME_HTML,
   MX_MSG_WELCOME_TXT,
@@ -35,9 +40,13 @@ if (
   !KC_REALM ||
   !MX_MSG_WELCOME_HTML ||
   !MX_MSG_WELCOME_TXT ||
-  !MX_MSG_COMMAND
+  !MX_MSG_COMMAND ||
+  !MX_DEVICE_ID ||
+  !MX_USER_ID
 ) {
-  throw new Error("Missing required configuration variables");
+  throw new Error(
+    "Missing a required configuration variable. See example file for more info."
+  );
 }
 
 const OLD_MESSAGE_THRESHOLD_MS = 30 * 1000;
@@ -48,8 +57,8 @@ logger.info("Starting VOW Matrix Invite Bot");
 const mxClient = sdk.createClient({
   baseUrl: "https://" + MX_HS_URL,
   accessToken: MX_ACCESS_TOKEN,
-  deviceId: "VOW Bot",
-  userId: "@vow.bot:vow.chat",
+  deviceId: MX_DEVICE_ID,
+  userId: MX_USER_ID,
 });
 
 const synapseAdminClient = new SynapseAdminClient(MX_HS_URL, MX_ACCESS_TOKEN);
@@ -71,6 +80,7 @@ const kcAdminClient = new KcAdminClient({
     realmName: KC_REALM,
   });
 
+  // Listener to check the monitored room for join events and check if the user is known to our Keycloak instance
   mxClient.on(RoomMemberEvent.Membership, async (event, member) => {
     const date = event.getDate();
     const isOld =
@@ -82,7 +92,7 @@ const kcAdminClient = new KcAdminClient({
       !isOld
     ) {
       logger.debug(
-        "User joined monitored room",
+        "A user joined monitored room",
         JSON.stringify(event, null, 2)
       );
     } else {
@@ -93,17 +103,24 @@ const kcAdminClient = new KcAdminClient({
     logger.debug("DM TARGET", dmTarget);
 
     if (dmTarget) {
+      let userInfo;
       try {
-        const userInfo = await synapseAdminClient.getUser(dmTarget);
+        userInfo = await synapseAdminClient.getUser(dmTarget);
+      } catch (e) {
+        logger.error("Error while getting User info from Keycloak", e);
+        return;
+      }
 
-        const keycloakId = userInfo?.external_ids?.find(
-          (entry) => entry.auth_provider === "oidc-keycloak"
-        )?.external_id;
+      const keycloakId = userInfo?.external_ids?.find(
+        (entry) => entry.auth_provider === "oidc-keycloak"
+      )?.external_id;
 
-        if (keycloakId) {
-          logger.debug("User is known in Keycloak as", keycloakId);
+      if (keycloakId) {
+        logger.debug("User is known in Keycloak as", keycloakId);
 
-          const kcUserGroups = (
+        let kcUserGroups;
+        try {
+          kcUserGroups = (
             await kcAdminClient.users.listGroups({
               id: keycloakId,
               briefRepresentation: false,
@@ -112,49 +129,59 @@ const kcAdminClient = new KcAdminClient({
             slug: groupObject?.attributes?.workshopSlug[0],
             name: groupObject?.attributes?.workshopName[0],
           }));
+        } catch (e) {
+          logger.error("Error while getting User groups from Keycloak", e);
+          return;
+        }
 
-          if (kcUserGroups.length) {
-            logger.debug(
-              "User has Keycloak Groups",
-              JSON.stringify(kcUserGroups, null, 2)
-            );
+        if (kcUserGroups?.length) {
+          logger.debug(
+            "User has Keycloak Groups",
+            JSON.stringify(kcUserGroups, null, 2)
+          );
 
-            logger.debug("Sending DM...");
-            const { room_id } = await mxClient.createRoom({
-              invite: [dmTarget],
-              is_direct: true,
-              preset: Preset.TrustedPrivateChat,
-              initial_state: [],
-            });
+          // TODO: See if space already exists and if user is already member. If not, check if he is Admin, and then create space.
+
+          logger.debug("Sending DM...");
+
+          let room_id;
+          try {
+            room_id = (
+              await mxClient.createRoom({
+                invite: [dmTarget],
+                is_direct: true,
+                preset: Preset.TrustedPrivateChat,
+                initial_state: [],
+              })
+            ).room_id;
 
             logger.debug("Created DM Room", room_id);
-
-            const bodyHtml = format(
-              MX_MSG_WELCOME_HTML,
-              dmTarget,
-              kcUserGroups[0].name
-            );
-            const bodyTxt = format(
-              MX_MSG_WELCOME_TXT,
-              dmTarget,
-              kcUserGroups[0].name
-            );
-            const sendResponse = await mxClient.sendHtmlMessage(
-              room_id,
-              bodyTxt,
-              bodyHtml
-            );
-            logger.debug("Sent DM to user.");
+          } catch (e) {
+            logger.error("Error while creating DM room with new user.", e);
+            return;
           }
-        } else {
-          logger.debug("User is unknown to Keycloak. Ignoring user.");
+
+          const bodyHtml = format(
+            MX_MSG_WELCOME_HTML,
+            dmTarget,
+            kcUserGroups[0].name
+          );
+          const bodyTxt = format(
+            MX_MSG_WELCOME_TXT,
+            dmTarget,
+            kcUserGroups[0].name
+          );
+
+          await mxClient.sendHtmlMessage(room_id, bodyTxt, bodyHtml);
+          logger.debug("Sent DM to user.");
         }
-      } catch (e) {
-        logger.debug("Error while getting Keycloak User Data.", e);
+      } else {
+        logger.debug("User is unknown to Keycloak. Ignoring user.");
       }
     }
   });
 
+  // Listener for creation command
   mxClient.on(
     RoomEvent.Timeline,
     async (
