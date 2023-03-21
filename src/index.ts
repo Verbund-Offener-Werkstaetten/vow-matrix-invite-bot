@@ -28,6 +28,9 @@ const {
   KC_REALM,
   KC_ADMIN_USERNAME,
   KC_ADMIN_PASSWORD,
+  MX_MSG_SPACE_EXISTS_HTML,
+  MX_MSG_SPACE_EXISTS_TXT,
+  MX_MSG_SPACE_CREATED_TXT,
 } = process.env;
 
 if (
@@ -42,7 +45,10 @@ if (
   !MX_MSG_WELCOME_TXT ||
   !MX_MSG_COMMAND ||
   !MX_DEVICE_ID ||
-  !MX_USER_ID
+  !MX_USER_ID ||
+  !MX_MSG_SPACE_EXISTS_HTML ||
+  !MX_MSG_SPACE_EXISTS_TXT ||
+  !MX_MSG_SPACE_CREATED_TXT
 ) {
   throw new Error(
     "Missing a required configuration variable. See example file for more info."
@@ -50,6 +56,8 @@ if (
 }
 
 const OLD_MESSAGE_THRESHOLD_MS = 30 * 1000;
+// Increment this to create unioue room IDs
+const ROOM_DEBUG_ITERATOR = "35";
 const logger = new Logger(LogLevel.Debug);
 
 logger.info("Starting VOW Matrix Invite Bot");
@@ -66,6 +74,11 @@ const synapseAdminClient = new SynapseAdminClient(MX_HS_URL, MX_ACCESS_TOKEN);
 const kcAdminClient = new KcAdminClient({
   baseUrl: KC_URL,
   realmName: "master",
+});
+
+const buildRoomName = (slug: string, modifier?: string) => ({
+  local: slug + modifier || "",
+  alias: "#" + slug + (modifier || "") + ":" + MX_HS_URL,
 });
 
 (async () => {
@@ -126,6 +139,7 @@ const kcAdminClient = new KcAdminClient({
               briefRepresentation: false,
             })
           ).map((groupObject) => ({
+            groupName: groupObject?.name,
             slug: groupObject?.attributes?.workshopSlug[0],
             name: groupObject?.attributes?.workshopName[0],
           }));
@@ -140,13 +154,33 @@ const kcAdminClient = new KcAdminClient({
             JSON.stringify(kcUserGroups, null, 2)
           );
 
+          const userIsOwner = kcUserGroups.some(group => group.groupName?.toLowerCase().includes("owner-approved"));
+          const userIsCrew = kcUserGroups.some(group => group.groupName?.toLowerCase().includes("crew-approved"));
+
+          if (!userIsOwner) {
+            logger.debug("User is not a workshop owner. Not sending anything to him.")
+            return;
+          }
+
           // TODO: See if space already exists and if user is already member. If not, check if he is Admin, and then create space.
+
+          const spaceName = buildRoomName(
+            kcUserGroups[0].slug,
+            ROOM_DEBUG_ITERATOR
+          );
+
+          let spaceExists;
+          try {
+            spaceExists = await mxClient.getRoomIdForAlias(spaceName.alias);
+          } catch (e) {
+            logger.error("Space doesn't exist, yet.", e);
+          }
 
           logger.debug("Sending DM...");
 
-          let room_id;
+          let dmRoomId;
           try {
-            room_id = (
+            dmRoomId = (
               await mxClient.createRoom({
                 invite: [dmTarget],
                 is_direct: true,
@@ -155,24 +189,56 @@ const kcAdminClient = new KcAdminClient({
               })
             ).room_id;
 
-            logger.debug("Created DM Room", room_id);
+            logger.debug("Created DM Room", dmRoomId);
           } catch (e) {
             logger.error("Error while creating DM room with new user.", e);
             return;
           }
 
-          const bodyHtml = format(
-            MX_MSG_WELCOME_HTML,
-            dmTarget,
-            kcUserGroups[0].name
-          );
-          const bodyTxt = format(
-            MX_MSG_WELCOME_TXT,
-            dmTarget,
-            kcUserGroups[0].name
-          );
+          let bodyHtml, bodyTxt;
 
-          await mxClient.sendHtmlMessage(room_id, bodyTxt, bodyHtml);
+          if (spaceExists) {
+            logger.debug("Space already exists.", spaceExists);
+            // Invite to space
+            try {
+              const inviteResponse = await mxClient.invite(
+                spaceExists.room_id,
+                dmTarget
+              );
+              logger.debug("Invite response", inviteResponse);
+            } catch (e) {
+              logger.error(
+                "Could not invite. User probably already joined.",
+                e
+              );
+            }
+
+            bodyHtml = format(
+              MX_MSG_SPACE_EXISTS_HTML,
+              dmTarget,
+              kcUserGroups[0].name,
+              spaceName.alias
+            );
+            bodyTxt = format(
+              MX_MSG_SPACE_EXISTS_TXT,
+              dmTarget,
+              kcUserGroups[0].name,
+              spaceName.alias
+            );
+          } else {
+            bodyHtml = format(
+              MX_MSG_WELCOME_HTML,
+              dmTarget,
+              kcUserGroups[0].name
+            );
+            bodyTxt = format(
+              MX_MSG_WELCOME_TXT,
+              dmTarget,
+              kcUserGroups[0].name
+            );
+          }
+
+          await mxClient.sendHtmlMessage(dmRoomId, bodyTxt, bodyHtml);
           logger.debug("Sent DM to user.");
         }
       } else {
@@ -216,7 +282,7 @@ const kcAdminClient = new KcAdminClient({
         senderId &&
         joinedMembers?.length === 2
       ) {
-        logger.debug("RECEIVED CREATE COMMAND.");
+        logger.debug("RECEIVED CREATE COMMAND FROM VALID USER.");
         let keycloakId = null;
         try {
           const userInfo = await synapseAdminClient.getUser(senderId);
@@ -236,24 +302,38 @@ const kcAdminClient = new KcAdminClient({
               briefRepresentation: false,
             })
           ).map((groupObject) => ({
+            groupName: groupObject.name,
             slug: groupObject?.attributes?.workshopSlug[0],
             name: groupObject?.attributes?.workshopName[0],
           }));
 
-          const spaceNameLocalPart = kcUserGroups[0].slug + "20";
-          const spaceName = "#" + spaceNameLocalPart + ":" + MX_HS_URL;
+          logger.debug("GOT KC GROUPS", kcUserGroups);
 
-          const roomNameLocalPart = kcUserGroups[0].slug + "-allgemein20";
-          const roomName = "#" + roomNameLocalPart + ":" + MX_HS_URL;
+          const userIsOwner = kcUserGroups.some(group => group.groupName?.toLowerCase().includes("owner-approved"));
+
+          if (!userIsOwner) {
+            logger.debug("User is not a workshop owner. Not creating space.")
+            return;
+          }
+
+          const spaceName = buildRoomName(
+            kcUserGroups[0].slug,
+            ROOM_DEBUG_ITERATOR
+          );
+          const roomName = buildRoomName(
+            kcUserGroups[0].slug + "-allgemein",
+            ROOM_DEBUG_ITERATOR
+          );
+
           let roomExists;
           let spaceExists;
           // Check if Space exists
-
           try {
-            spaceExists = (await mxClient.getRoomIdForAlias(spaceName)).room_id;
+            spaceExists = (await mxClient.getRoomIdForAlias(spaceName.alias))
+              .room_id;
             logger.debug("Space already exists", spaceExists);
 
-            mxClient.invite(spaceExists, senderId);
+            await mxClient.invite(spaceExists, senderId);
 
             if (room?.roomId) {
               await mxClient.sendTextMessage(
@@ -266,7 +346,7 @@ const kcAdminClient = new KcAdminClient({
             spaceExists = (
               await mxClient.createRoom({
                 name: kcUserGroups[0].name,
-                room_alias_name: spaceNameLocalPart,
+                room_alias_name: spaceName.local,
                 topic: "Space für " + kcUserGroups[0].name,
                 creation_content: { type: "m.space" },
                 invite: [senderId],
@@ -274,55 +354,77 @@ const kcAdminClient = new KcAdminClient({
             ).room_id;
             logger.debug("Created space", spaceExists);
 
-            // TODO: Link to space and show display name instead of ID
+            // TODO: Power Levels not working, yet
+            const powerLevelsEvent = new MatrixEvent({
+              type: "m.room.power_levels",
+              state_key: "",
+              event_id: "_",
+              sender: "",
+              room_id: spaceExists,
+              content: {
+                users: {
+                  [senderId]: 100,
+                },
+              },
+            });
+
+            logger.debug("power levels event", powerLevelsEvent);
+
+            const spaceRoom = await mxClient.getRoom(spaceExists);
+            const roomMember = spaceRoom?.getMember(senderId);
+            logger.debug("Room member", roomMember);
+            roomMember?.setPowerLevelEvent(powerLevelsEvent);
+
             if (room?.roomId) {
               await mxClient.sendTextMessage(
                 room?.roomId,
-                "Der Space " + spaceExists + " wurde für dich erstellt."
+                format(MX_MSG_SPACE_CREATED_TXT, spaceName.alias)
               );
             }
           }
 
           try {
-            roomExists = (await mxClient.getRoomIdForAlias(roomName)).room_id;
+            roomExists = (await mxClient.getRoomIdForAlias(roomName.alias))
+              .room_id;
             logger.debug("Room already exists", roomExists);
           } catch (e) {
             // Create room
-            const roomResponse = await mxClient.createRoom({
-              name: kcUserGroups[0].name + " Allgemein",
-              room_alias_name: roomNameLocalPart,
-              topic: "Allgemeiner Raum für " + kcUserGroups[0].name,
-              visibility: Visibility.Public,
-            });
-            logger.debug("Created room", roomResponse);
+            roomExists = (
+              await mxClient.createRoom({
+                name: kcUserGroups[0].name + " Allgemein",
+                room_alias_name: roomName.local,
+                topic: "Allgemeiner Raum für " + kcUserGroups[0].name,
+                visibility: Visibility.Public,
+              })
+            ).room_id;
+            logger.debug("Created room", roomExists);
           }
 
-          // Nest rooms if they existed
+          // Nest rooms if they exist
           if (roomExists && spaceExists) {
-            const rel1 = await mxClient.sendStateEvent(
-              spaceExists,
-              "m.space.child",
-              {
-                via: MX_HS_URL,
-                suggested: true,
-              },
-              roomExists
-            );
-            const rel2 = await mxClient.sendStateEvent(
-              roomExists,
-              "m.space.parent",
-              {
-                via: MX_HS_URL,
-              },
-              spaceExists
-            );
-            logger.debug("rel1", rel1);
-            logger.debug("rel2", rel2);
+            try {
+              await mxClient.sendStateEvent(
+                spaceExists,
+                "m.space.child",
+                {
+                  via: [MX_HS_URL],
+                  suggested: true,
+                },
+                roomExists
+              );
+              await mxClient.sendStateEvent(
+                roomExists,
+                "m.space.parent",
+                {
+                  via: [MX_HS_URL],
+                },
+                spaceExists
+              );
+              logger.debug("Sucessfully nested room into space.");
+            } catch (e) {
+              logger.error("Could not nest space/room.");
+            }
           }
-
-          // Invite to Rooms
-          // spaceExists && mxClient.invite(spaceExists.room_id, senderId);
-          roomExists && mxClient.invite(roomExists, senderId);
         }
       }
     }

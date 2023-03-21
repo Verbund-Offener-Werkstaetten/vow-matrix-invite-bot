@@ -13,14 +13,15 @@ export class Logger {
   }
 
   log(level: LogLevel, ...message: unknown[]) {
-    const formattedMessages = message.map((msg) =>
-      typeof msg !== "string" || typeof msg !== "number"
-        ? JSON.stringify(msg, null, 2)
-        : msg
-    );
+    const formattedMessages = message.map((msg) => {
+      const isStringOrNumber =
+        typeof msg === "string" || typeof msg === "number";
+
+      return isStringOrNumber ? msg : JSON.stringify(msg, null, 2);
+    });
     const output = `${
       new Date().toISOString().replace("T", " ").split(".")[0]
-    } ${level} ${formattedMessages.join(" ")}`;
+    } - ${level} - ${formattedMessages.join(" ")}`;
 
     switch (level) {
       case LogLevel.Debug:
