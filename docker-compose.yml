@@ -1,0 +1,8 @@
+version: '2'
+services:
+  bot:
+    container_name: vow-matrix-bot
+    build: .
+    env_file: .env
+    environment:
+      - MX_MONITORED_ROOM_ID="blabla"

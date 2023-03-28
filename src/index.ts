@@ -61,6 +61,7 @@ const ROOM_DEBUG_ITERATOR = "36";
 const logger = new Logger(LogLevel.Debug);
 
 logger.info("Starting VOW Matrix Invite Bot");
+logger.info("Monitored Room: ", MX_MONITORED_ROOM_ID);
 
 const mxClient = sdk.createClient({
   baseUrl: "https://" + MX_HS_URL,
