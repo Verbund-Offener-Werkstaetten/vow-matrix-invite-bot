@@ -26,8 +26,8 @@ const {
   MX_MSG_COMMAND,
   KC_URL,
   KC_REALM,
-  KC_ADMIN_USERNAME,
-  KC_ADMIN_PASSWORD,
+  KC_CLIENT_ID,
+  KC_CLIENT_SECRET,
   MX_MSG_SPACE_EXISTS_HTML,
   MX_MSG_SPACE_EXISTS_TXT,
   MX_MSG_SPACE_CREATED_TXT,
@@ -38,8 +38,8 @@ if (
   !MX_HS_URL ||
   !MX_ACCESS_TOKEN ||
   !KC_URL ||
-  !KC_ADMIN_USERNAME ||
-  !KC_ADMIN_PASSWORD ||
+  !KC_CLIENT_ID ||
+  !KC_CLIENT_SECRET ||
   !KC_REALM ||
   !MX_MSG_WELCOME_HTML ||
   !MX_MSG_WELCOME_TXT ||
@@ -74,7 +74,7 @@ const synapseAdminClient = new SynapseAdminClient(MX_HS_URL, MX_ACCESS_TOKEN);
 
 const kcAdminClient = new KcAdminClient({
   baseUrl: KC_URL,
-  realmName: "master",
+  realmName: KC_REALM,
 });
 
 const buildRoomName = (slug: string, modifier?: string) => ({
@@ -84,20 +84,15 @@ const buildRoomName = (slug: string, modifier?: string) => ({
 
 (async () => {
   await kcAdminClient.auth({
-    username: KC_ADMIN_USERNAME,
-    password: KC_ADMIN_PASSWORD,
-    grantType: "password",
-    clientId: "admin-cli",
-  });
-
-  kcAdminClient.setConfig({
-    realmName: KC_REALM,
+    grantType: "client_credentials",
+    clientId: KC_CLIENT_ID,
+    clientSecret: KC_CLIENT_SECRET
   });
 
   // Listener to check the monitored room for join events and maybe send introduction DM to the new user
   mxClient.on(RoomMemberEvent.Membership, async (event, member) => {
     const date = event.getDate();
-    const isOld =
+    const isOld= 
       new Date().getTime() - (date?.getTime() ?? 0) > OLD_MESSAGE_THRESHOLD_MS;
 
     if (
