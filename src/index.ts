@@ -57,7 +57,7 @@ if (
 
 const OLD_MESSAGE_THRESHOLD_MS = 20 * 1000;
 // Increment this to create unioue room IDs
-const ROOM_DEBUG_ITERATOR = "38";
+const ROOM_DEBUG_ITERATOR = "39";
 const logger = new Logger(LogLevel.Debug);
 
 logger.info("Starting VOW Matrix Invite Bot");
@@ -285,7 +285,11 @@ const buildRoomName = (slug: string, modifier?: string) => ({
       const senderId = event.getSender();
 
       // Ignore own messages
-      if (senderId === mxClient.getUserId() || event.getType() !== "m.room.message") return;
+      if (
+        senderId === mxClient.getUserId() ||
+        event.getType() !== "m.room.message"
+      )
+        return;
 
       const c: any = event.getContent();
 
@@ -352,6 +356,21 @@ const buildRoomName = (slug: string, modifier?: string) => ({
 
             await mxClient.invite(spaceExists, senderId);
 
+            const spaceRoom = await mxClient.getRoom(spaceExists);
+
+            // Get old power levels to merge with new permissions
+            const powerLevelEvent = spaceRoom?.currentState.getStateEvents(
+              "m.room.power_levels",
+              ""
+            );
+
+            mxClient.setPowerLevel(
+              spaceExists,
+              [senderId, MX_USER_ID],
+              100,
+              powerLevelEvent || null
+            );
+
             if (room?.roomId) {
               await mxClient.sendTextMessage(
                 room?.roomId,
@@ -398,6 +417,21 @@ const buildRoomName = (slug: string, modifier?: string) => ({
             roomExists = (await mxClient.getRoomIdForAlias(roomName.alias))
               .room_id;
             logger.debug("Room already exists", roomExists);
+
+            const spaceRoom = await mxClient.getRoom(roomExists);
+
+            // Get old power levels to merge with new permissions
+            const powerLevelEvent = spaceRoom?.currentState.getStateEvents(
+              "m.room.power_levels",
+              ""
+            );
+
+            mxClient.setPowerLevel(
+              roomExists,
+              [senderId, MX_USER_ID],
+              100,
+              powerLevelEvent || null
+            );
           } catch (e) {
             // Create room
             roomExists = (
@@ -428,6 +462,21 @@ const buildRoomName = (slug: string, modifier?: string) => ({
               })
             ).room_id;
             logger.debug("Created room", roomExists);
+
+            const spaceRoom = await mxClient.getRoom(roomExists);
+
+            // Get old power levels to merge with new permissions
+            const powerLevelEvent = spaceRoom?.currentState.getStateEvents(
+              "m.room.power_levels",
+              ""
+            );
+
+            mxClient.setPowerLevel(
+              roomExists,
+              [senderId, MX_USER_ID],
+              100,
+              powerLevelEvent || null
+            );
           }
 
           // Nest rooms if they exist
