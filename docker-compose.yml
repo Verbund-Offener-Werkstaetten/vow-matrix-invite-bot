@@ -4,5 +4,5 @@ services:
     container_name: vow-matrix-bot
     build: .
     env_file: .env
-    environment:
-      - MX_MONITORED_ROOM_ID="blabla"
+#    environment:
+#      - MX_MONITORED_ROOM_ID=!abc123:vow.chat

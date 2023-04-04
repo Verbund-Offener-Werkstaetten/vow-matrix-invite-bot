@@ -55,13 +55,13 @@ if (
   );
 }
 
-const OLD_MESSAGE_THRESHOLD_MS = 30 * 1000;
+const OLD_MESSAGE_THRESHOLD_MS = 20 * 1000;
 // Increment this to create unioue room IDs
-const ROOM_DEBUG_ITERATOR = "36";
+const ROOM_DEBUG_ITERATOR = "38";
 const logger = new Logger(LogLevel.Debug);
 
 logger.info("Starting VOW Matrix Invite Bot");
-logger.info("Monitored Room: ", MX_MONITORED_ROOM_ID);
+logger.info("Monitored Room:", MX_MONITORED_ROOM_ID);
 
 const mxClient = sdk.createClient({
   baseUrl: "https://" + MX_HS_URL,
@@ -94,27 +94,22 @@ const buildRoomName = (slug: string, modifier?: string) => ({
     realmName: KC_REALM,
   });
 
-  // Listener to check the monitored room for join events and check if the user is known to our Keycloak instance
+  // Listener to check the monitored room for join events and maybe send introduction DM to the new user
   mxClient.on(RoomMemberEvent.Membership, async (event, member) => {
     const date = event.getDate();
     const isOld =
       new Date().getTime() - (date?.getTime() ?? 0) > OLD_MESSAGE_THRESHOLD_MS;
 
     if (
-      member.membership === "join" &&
-      event.getRoomId() === MX_MONITORED_ROOM_ID &&
-      !isOld
+      member.membership !== "join" ||
+      event.getRoomId() !== MX_MONITORED_ROOM_ID ||
+      isOld
     ) {
-      logger.debug(
-        "A user joined monitored room",
-        JSON.stringify(event, null, 2)
-      );
-    } else {
       return;
     }
 
     const dmTarget = event.getSender();
-    logger.debug("DM TARGET", dmTarget);
+    logger.debug("A user joined the monitored room", dmTarget);
 
     if (dmTarget) {
       let userInfo;
@@ -290,10 +285,7 @@ const buildRoomName = (slug: string, modifier?: string) => ({
       const senderId = event.getSender();
 
       // Ignore own messages
-      if (senderId === mxClient.getUserId()) return;
-
-      // Only chat messages
-      if (event.getType() !== "m.room.message") return;
+      if (senderId === mxClient.getUserId() || event.getType() !== "m.room.message") return;
 
       const c: any = event.getContent();
 
@@ -305,7 +297,7 @@ const buildRoomName = (slug: string, modifier?: string) => ({
         senderId &&
         joinedMembers?.length === 2
       ) {
-        logger.debug("RECEIVED CREATE COMMAND FROM VALID USER.");
+        logger.debug("Received Create command.");
         let keycloakId = null;
         try {
           const userInfo = await synapseAdminClient.getUser(senderId);
@@ -314,9 +306,9 @@ const buildRoomName = (slug: string, modifier?: string) => ({
             (entry) => entry.auth_provider === "oidc-keycloak"
           )?.external_id;
         } catch (e) {
-          logger.error("Could not fetch User from Keycloak.", e);
+          logger.error("Could not fetch user from Keycloak.", e);
         }
-        logger.debug("GOT KC USER INFO");
+        logger.debug("User is known to Keycloak");
 
         if (keycloakId) {
           const kcUserGroups = (
@@ -352,7 +344,7 @@ const buildRoomName = (slug: string, modifier?: string) => ({
 
           let roomExists;
           let spaceExists;
-          // Check if Space exists
+          // Check if Space already exists
           try {
             spaceExists = (await mxClient.getRoomIdForAlias(spaceName.alias))
               .room_id;
@@ -379,35 +371,20 @@ const buildRoomName = (slug: string, modifier?: string) => ({
             ).room_id;
             logger.debug("Created space", spaceExists);
 
-            // TODO: Make sure, power levels are not overwritten (pass old power levels event)
+            const spaceRoom = await mxClient.getRoom(spaceExists);
+
+            // Get old power levels to merge with new permissions
+            const powerLevelEvent = spaceRoom?.currentState.getStateEvents(
+              "m.room.power_levels",
+              ""
+            );
+
             mxClient.setPowerLevel(
               spaceExists,
               [senderId, MX_USER_ID],
               100,
-              null
+              powerLevelEvent || null
             );
-
-            // TODO: Power Levels not working, yet
-            // const powerLevelsEvent = new MatrixEvent({
-            //   type: "m.room.power_levels",
-            //   state_key: "",
-            //   event_id: "_",
-            //   sender: "",
-            //   room_id: spaceExists,
-            //   content: {
-            //     users: {
-            //       [senderId]: 100,
-            //       [MX_USER_ID]: 100,
-            //     },
-            //   },
-            // });
-
-            // logger.debug("power levels event", powerLevelsEvent);
-
-            // const spaceRoom = await mxClient.getRoom(spaceExists);
-            // const roomMember = spaceRoom?.getMember(senderId);
-            // logger.debug("Room member", roomMember);
-            // roomMember?.setPowerLevelEvent(powerLevelsEvent);
 
             if (room?.roomId) {
               await mxClient.sendTextMessage(
@@ -429,6 +406,25 @@ const buildRoomName = (slug: string, modifier?: string) => ({
                 room_alias_name: roomName.local,
                 topic: "Allgemeiner Raum für " + kcUserGroups[0].name,
                 visibility: Visibility.Public,
+                ...(spaceExists
+                  ? {
+                      initial_state: [
+                        {
+                          type: "m.room.join_rules",
+                          state_key: "",
+                          content: {
+                            join_rule: "restricted",
+                            allow: [
+                              {
+                                type: "m.room_membership",
+                                room_id: spaceExists,
+                              },
+                            ],
+                          },
+                        },
+                      ],
+                    }
+                  : {}),
               })
             ).room_id;
             logger.debug("Created room", roomExists);
