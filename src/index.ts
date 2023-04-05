@@ -72,6 +72,12 @@ const mxClient = sdk.createClient({
 
 const synapseAdminClient = new SynapseAdminClient(MX_HS_URL, MX_ACCESS_TOKEN);
 
+const kcCredentials = {
+  grantType: "client_credentials" as const,
+  clientId: KC_CLIENT_ID,
+  clientSecret: KC_CLIENT_SECRET,
+};
+
 const kcAdminClient = new KcAdminClient({
   baseUrl: KC_URL,
   realmName: KC_REALM,
@@ -83,16 +89,18 @@ const buildRoomName = (slug: string, modifier?: string) => ({
 });
 
 (async () => {
-  await kcAdminClient.auth({
-    grantType: "client_credentials",
-    clientId: KC_CLIENT_ID,
-    clientSecret: KC_CLIENT_SECRET
-  });
+  await kcAdminClient.auth(kcCredentials);
+
+  // Refresh key every 58min
+  setInterval(() => {
+    logger.info("Refreshing Keycloak token");
+    kcAdminClient.auth(kcCredentials);
+  }, 58 * 60 * 1000);
 
   // Listener to check the monitored room for join events and maybe send introduction DM to the new user
   mxClient.on(RoomMemberEvent.Membership, async (event, member) => {
     const date = event.getDate();
-    const isOld= 
+    const isOld =
       new Date().getTime() - (date?.getTime() ?? 0) > OLD_MESSAGE_THRESHOLD_MS;
 
     if (
