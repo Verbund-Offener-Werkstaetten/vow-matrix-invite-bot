@@ -35,5 +35,5 @@ To test/develop this project locally, you need to have Node.js installed (for co
 - Run `docker-compose up`
 
 ## Problems/Todos
-- Somehow the Keycloak API always fails on first start. Restarting the bot fixes it, but it's annoying and should be fixed.
 - Currently, message encryption is not supported, b/c there seems to be no way to extract a proper token from Synapse when using SSO login. The token that can be extracted from Element is device-specific does not work with encryption enabled.
+- DM rooms with users a re not reused, so every time a user leaves and enters the monitored room, there will be a new DM room with the bot.
