@@ -55,8 +55,7 @@ if (
   !MX_MSG_SPACE_EXISTS_HTML ||
   !MX_MSG_SPACE_EXISTS_TXT ||
   !MX_MSG_SPACE_CREATED_TXT ||
-  !MX_GENERAL_ROOM_SUFFIX ||
-  !MX_ROOM_DEBUG_ITERATOR
+  !MX_GENERAL_ROOM_SUFFIX
 ) {
   throw new Error(
     "Missing a required configuration variable. See example file for more info."
