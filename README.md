@@ -2,7 +2,7 @@
 
 This is an invite Bot for Matrix. Depending on the Keycloak groups of a given user, it will create and/or invite users to specific Matrix rooms and/or spaces.
 
-It uses three APIs for this purpose (the Matrix Client-Server API, the Synapse Admin API and the Keycloak Admin API).
+It uses three APIs for this purpose (the [Matrix Client-Server API](https://spec.matrix.org/latest/client-server-api/), the [Synapse Admin API](https://matrix-org.github.io/synapse/latest/usage/administration/admin_api/) and the [Keycloak Admin API](https://www.keycloak.org/docs-api/21.0.2/rest-api/index.html)).
 
 This bot consists of two separate and independent parts:
 
@@ -22,7 +22,7 @@ flowchart TD
     F -->|No| J[Send 'Create DM']
  ```
 
-### 2. Creating/inviting a user, when he sends a creation command
+### 2. Creating/inviting a user, when user sends a creation command
 
 
 

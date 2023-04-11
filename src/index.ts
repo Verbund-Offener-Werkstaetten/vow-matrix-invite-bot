@@ -34,6 +34,7 @@ const {
   MX_MSG_SPACE_EXISTS_TXT,
   MX_MSG_SPACE_CREATED_TXT,
   MX_GENERAL_ROOM_SUFFIX,
+  MX_ROOM_DEBUG_ITERATOR
 } = process.env;
 
 if (
@@ -54,7 +55,8 @@ if (
   !MX_MSG_SPACE_EXISTS_HTML ||
   !MX_MSG_SPACE_EXISTS_TXT ||
   !MX_MSG_SPACE_CREATED_TXT ||
-  !MX_GENERAL_ROOM_SUFFIX
+  !MX_GENERAL_ROOM_SUFFIX ||
+  !MX_ROOM_DEBUG_ITERATOR
 ) {
   throw new Error(
     "Missing a required configuration variable. See example file for more info."
@@ -64,8 +66,6 @@ if (
 const OLD_MESSAGE_THRESHOLD_MS = 20 * 1000;
 const SYNAPSE_EXTERNAL_AUTH_PROVIDER = "oidc-keycloak";
 
-// Increment this to create unique room IDs
-const ROOM_DEBUG_ITERATOR = "39";
 const logger = new Logger(LogLevel.Debug);
 
 logger.info("Starting VOW Matrix Invite Bot");
@@ -205,7 +205,7 @@ const setPowerLevelForUsers = async (
 
             const spaceName = buildRoomName(
               kcUserGroups[0].slug,
-              ROOM_DEBUG_ITERATOR
+              MX_ROOM_DEBUG_ITERATOR
             );
 
             let spaceExists;
@@ -391,11 +391,11 @@ const setPowerLevelForUsers = async (
 
             const spaceName = buildRoomName(
               kcUserGroups[0].slug,
-              ROOM_DEBUG_ITERATOR
+              MX_ROOM_DEBUG_ITERATOR
             );
             const roomName = buildRoomName(
               kcUserGroups[0].slug + MX_GENERAL_ROOM_SUFFIX,
-              ROOM_DEBUG_ITERATOR
+              MX_ROOM_DEBUG_ITERATOR
             );
 
             let roomId, spaceId;
