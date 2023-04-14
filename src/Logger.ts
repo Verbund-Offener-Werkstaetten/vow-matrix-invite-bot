@@ -44,14 +44,24 @@ export class Logger {
   }
 
   info(...msg: unknown[]) {
-    this.log(LogLevel.Info, ...msg);
+    if (
+      this.level === LogLevel.Info ||
+      this.level === LogLevel.Warn ||
+      this.level === LogLevel.Error
+    ) {
+      this.log(LogLevel.Info, ...msg);
+    }
   }
 
   warn(...msg: unknown[]) {
-    this.log(LogLevel.Warn, ...msg);
+    if (this.level === LogLevel.Warn || this.level === LogLevel.Error) {
+      this.log(LogLevel.Warn, ...msg);
+    }
   }
 
   error(...msg: unknown[]) {
-    this.log(LogLevel.Error, ...msg);
+    if (this.level === LogLevel.Error) {
+      this.log(LogLevel.Error, ...msg);
+    }
   }
 }
