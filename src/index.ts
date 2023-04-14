@@ -69,7 +69,7 @@ const OLD_MESSAGE_THRESHOLD_MS = 20 * 1000;
 const SYNAPSE_EXTERNAL_AUTH_PROVIDER = "oidc-keycloak";
 
 const logger = new Logger(
-  LogLevel[(LOG_LEVEL as keyof typeof LogLevel) || ("error" as const)]
+  LogLevel[(LOG_LEVEL as keyof typeof LogLevel) || ("Error" as const)]
 );
 
 interface UserGroup {

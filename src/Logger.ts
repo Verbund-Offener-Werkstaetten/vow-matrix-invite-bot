@@ -40,27 +40,34 @@ export class Logger {
   }
 
   debug(...msg: unknown[]) {
-    this.log(LogLevel.Debug, ...msg);
+    if (this.level === LogLevel.Debug) {
+      this.log(LogLevel.Debug, ...msg);
+    }
   }
 
   info(...msg: unknown[]) {
-    if (
-      this.level === LogLevel.Info ||
-      this.level === LogLevel.Warn ||
-      this.level === LogLevel.Error
-    ) {
+    if (this.level === LogLevel.Debug || this.level === LogLevel.Info) {
       this.log(LogLevel.Info, ...msg);
     }
   }
 
   warn(...msg: unknown[]) {
-    if (this.level === LogLevel.Warn || this.level === LogLevel.Error) {
+    if (
+      this.level === LogLevel.Debug ||
+      this.level === LogLevel.Info ||
+      this.level === LogLevel.Warn
+    ) {
       this.log(LogLevel.Warn, ...msg);
     }
   }
 
   error(...msg: unknown[]) {
-    if (this.level === LogLevel.Error) {
+    if (
+      this.level === LogLevel.Debug ||
+      this.level === LogLevel.Info ||
+      this.level === LogLevel.Warn ||
+      this.level === LogLevel.Error
+    ) {
       this.log(LogLevel.Error, ...msg);
     }
   }
