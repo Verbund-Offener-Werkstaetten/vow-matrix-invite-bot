@@ -9,7 +9,7 @@ import {
   RoomMemberEvent,
   Visibility,
 } from "matrix-js-sdk";
-import { SynapseAdminClient } from "./SynapseAdminClient.js";
+import { SynapseAdminClient, SynapseMxId } from "./SynapseAdminClient.js";
 import { Logger, LogLevel } from "./Logger.js";
 import * as dotenv from "dotenv";
 
@@ -434,6 +434,8 @@ const setPowerLevelForUsers = async (
                 g.groupName?.toLowerCase().includes(KC_CREW_SUFFIX)
             );
 
+            logger.debug("Crew Workshop Group", crewWorkshopGroup);
+
             if (!ownerWorkshopGroup) {
               logger.debug("User is not a workshop owner. Not creating space.");
               return;
@@ -448,7 +450,7 @@ const setPowerLevelForUsers = async (
               MX_ROOM_DEBUG_ITERATOR
             );
 
-            let roomId, spaceId;
+            let roomId: string, spaceId: string;
             let spaceExists = true;
             // Check if Space already exists
 
@@ -469,25 +471,6 @@ const setPowerLevelForUsers = async (
                 })
               ).room_id;
               logger.debug("Created space", spaceId);
-
-              if (crewWorkshopGroup) {
-                // Invite existing users
-                const kcCrewMembers = await kcAdminClient.groups.listMembers({
-                  id: crewWorkshopGroup.id,
-                });
-                const kcCrewMemberIds = kcCrewMembers
-                  .map((group) => group.id)
-                  .filter(Boolean);
-
-                const results = await Promise.allSettled(
-                  kcCrewMemberIds.map((id) =>
-                    synapseAdminClient.getMxIdFromKcId(
-                      SYNAPSE_EXTERNAL_AUTH_PROVIDER,
-                      id as string
-                    )
-                  )
-                );
-              }
             }
 
             await mxClient?.invite(spaceId, senderId);
@@ -533,6 +516,51 @@ const setPowerLevelForUsers = async (
                 })
               ).room_id;
               logger.debug("Created room", roomId);
+
+              if (crewWorkshopGroup) {
+                // Invite existing users
+                const kcCrewMembers = await kcAdminClient.groups.listMembers({
+                  id: crewWorkshopGroup.id,
+                });
+
+                const kcCrewMemberIds = kcCrewMembers
+                  .map((group) => group.id)
+                  .filter(Boolean);
+
+                logger.debug(
+                  "Found other crew members from same workshop",
+                  kcCrewMemberIds
+                );
+
+                const results = await Promise.allSettled(
+                  kcCrewMemberIds.map((id) =>
+                    synapseAdminClient.getMxIdFromKcId(
+                      SYNAPSE_EXTERNAL_AUTH_PROVIDER,
+                      id as string
+                    )
+                  )
+                );
+
+                const mxIdsOfCrew = (
+                  results.filter(
+                    (result) => result.status === "fulfilled"
+                  ) as PromiseFulfilledResult<SynapseMxId>[]
+                ).map((result) => result.value.user_id);
+
+                logger.debug(
+                  "Found Matrix IDs for other crew members",
+                  mxIdsOfCrew
+                );
+
+                await Promise.allSettled(
+                  mxIdsOfCrew.map((mxId) => mxClient.invite(spaceId, mxId))
+                );
+                await Promise.allSettled(
+                  mxIdsOfCrew.map((mxId) => mxClient.invite(roomId, mxId))
+                );
+
+                logger.debug("Invited other crew members to Space and Room");
+              }
             }
 
             setPowerLevelForUsers(roomId, [senderId, MX_USER_ID], 100);
