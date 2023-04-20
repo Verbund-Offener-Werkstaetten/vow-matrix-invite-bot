@@ -46,7 +46,13 @@ class SynapseAdminClient {
       ...config,
       headers: { Authorization: "Bearer " + this.accessToken },
     })
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) {
+          throw response;
+        }
+
+        return response.json();
+      })
       .then((data) => data as TResponse);
   }
 }
