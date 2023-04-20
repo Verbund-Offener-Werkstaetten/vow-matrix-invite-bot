@@ -76,6 +76,7 @@ interface UserGroup {
   groupName?: string;
   slug: string;
   name?: string;
+  id: string;
 }
 
 logger.info("Starting VOW Matrix Invite Bot");
@@ -415,6 +416,7 @@ const setPowerLevelForUsers = async (
                 // Keycloak SDK/API will always return array for these attributes, even if they're just strings, so we take the first element
                 slug: groupObject?.attributes?.workshopSlug[0],
                 name: groupObject?.attributes?.workshopName[0],
+                id: groupObject?.id,
               }));
 
             logger.debug("GOT KC GROUPS", kcUserGroups);
@@ -424,6 +426,12 @@ const setPowerLevelForUsers = async (
               (g) =>
                 g.slug === slug &&
                 g.groupName?.toLowerCase().includes(KC_OWNER_SUFFIX)
+            );
+
+            const crewWorkshopGroup = kcUserGroups.find(
+              (g) =>
+                g.slug === slug &&
+                g.groupName?.toLowerCase().includes(KC_CREW_SUFFIX)
             );
 
             if (!ownerWorkshopGroup) {
@@ -461,6 +469,25 @@ const setPowerLevelForUsers = async (
                 })
               ).room_id;
               logger.debug("Created space", spaceId);
+
+              if (crewWorkshopGroup) {
+                // Invite existing users
+                const kcCrewMembers = await kcAdminClient.groups.listMembers({
+                  id: crewWorkshopGroup.id,
+                });
+                const kcCrewMemberIds = kcCrewMembers
+                  .map((group) => group.id)
+                  .filter(Boolean);
+
+                const results = await Promise.allSettled(
+                  kcCrewMemberIds.map((id) =>
+                    synapseAdminClient.getMxIdFromKcId(
+                      SYNAPSE_EXTERNAL_AUTH_PROVIDER,
+                      id as string
+                    )
+                  )
+                );
+              }
             }
 
             await mxClient?.invite(spaceId, senderId);

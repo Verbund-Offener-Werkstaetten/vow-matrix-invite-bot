@@ -3,6 +3,10 @@ interface SynapseUser {
   [x: string]: unknown;
 }
 
+export interface SynapseMxId {
+  user_id: string;
+}
+
 class SynapseAdminClient {
   readonly homeserverUrl: string;
   readonly accessToken: string;
@@ -18,6 +22,19 @@ class SynapseAdminClient {
         this.homeserverUrl +
         "/_synapse/admin/v2/users/" +
         encodeURIComponent(userId)
+    );
+  }
+
+  async getMxIdFromKcId(
+    authProvider: string,
+    kcId: string
+  ): Promise<SynapseMxId> {
+    return this.doRequest<SynapseMxId>(
+      "https://" +
+        this.homeserverUrl +
+        `/_synapse/admin/v1/auth_providers/${encodeURIComponent(
+          authProvider
+        )}/users/${encodeURIComponent(kcId)}`
     );
   }
 
