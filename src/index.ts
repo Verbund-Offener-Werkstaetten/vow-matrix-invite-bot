@@ -102,7 +102,7 @@ const kcAdminClient = new KcAdminClient({
 });
 
 const buildRoomName = (slug: string, modifier?: string) => ({
-  local: slug + modifier || "",
+  local: slug + (modifier || ""),
   alias: "#" + slug + (modifier || "") + ":" + MX_HS_URL,
 });
 
